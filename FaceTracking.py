@@ -3,104 +3,126 @@ import numpy as np
 from djitellopy import tello
 import time
 
-
-me=tello.Tello()
+# Créer une instance du drone Tello
+me = tello.Tello()
+# Se connecter au drone
 me.connect()
+# Afficher le niveau de batterie du drone
 print(me.get_battery())
 
-# Définir la qualité de l'image
+# Définir la qualité de l'image (facultatif)
 #me.set_video_bitrate(0)
 
-#Demarrer le stream de la camera
+# Démarrer le flux vidéo de la caméra du drone
 me.streamon()
 
-me.takeoff()
-me.send_rc_control(0,0,25,0)
-time.sleep(2.2)
+# Prendre décollage du drone
+#me.takeoff()
+# Envoyer le drone en haut à une hauteur de 175 cm
+me.send_rc_control(0, 0, 0, 50)
+time.sleep(1.5)
+me.send_rc_control(0, 0, 0, 0)
 
-
-
-fbRange = [6200,6800]
+# Définir la plage de tailles de visage à suivre
+fbRange = [6200, 6800]
+# Définir les coefficients PID pour la poursuite du visage
 pid = [0.4, 0.4, 0]
+# Initialiser l'erreur précédente
 pError = 0
-w,h = 360, 240
+# Définir la largeur et la hauteur de l'image
+w, h = 360, 240
 
-
+# Définir une fonction pour trouver le visage dans l'image
 def findFace(img):
+    # Charger le classificateur Haar cascade pour la détection de visage
     faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = faceCascade.detectMultiScale(imgGray, 1.2, 8)
+    # Convertir l'image en niveau de gris
+    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.uint8)
+    # Detecter les visages dans l'image
+    faces = faceCascade.detectMultiScale(imgGray, scaleFactor=1.1, minNeighbors=5)
 
+    # Initialiser les listes pour stocker les coordonnées et les superficies des visages
     myFaceListC = []
     myFaceListArea = []
 
-    for (x,y,w,h) in faces:
-        cv2.rectangle(img, (x, y),(x + w, y + h),(0,0,255), 2)
-# Centrer le carré du visage ?
+    # Boucler sur les visages détectés
+    for (x, y, w, h) in faces:
+        # Dessiner un rectangle autour du visage
+        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        # Calculer la position centrale du visage
         cx = x + w // 2
-        cy = y + h //2
+        cy = y + h // 2
+        # Calculer la superficie du visage
         area = w * h
-        cv2.circle(img,(cx,cy),5, (0,255,0), cv2.FILLED)
-        myFaceListC.append([cx,cy])
+        # Dessiner un cercle à la position centrale du visage
+        cv2.circle(img, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
+        # Ajouter les coordonnées et la superficie du visage aux listes
+        myFaceListC.append([cx, cy])
         myFaceListArea.append(area)
 
-    if len(myFaceListArea) !=0:
+    # Si des visages sont détectés
+    if len(myFaceListArea) != 0:
+        # Trouver l'index du visage avec la superficie la plus grande
         i = myFaceListArea.index(max(myFaceListArea))
-        return img, [myFaceListC[i],myFaceListArea[i]]
+        # Retourner l'image et les coordonnées et la superficie du visage
+        return img, [myFaceListC[i], myFaceListArea[i]]
     else:
-        return img, [[0,0], 0]
+        # Si aucun visage n'est détecté, retourner l'image et les coordonnées et la superficie par défaut
+        return img, [[0, 0], 0]
 
-
-#fonction de suivi
+# Définir une fonction pour suivre le visage
 def trackFace(me, info, w, pid, pError):
+    # Récupérer les coordonnées et la superficie du visage
     area = info[1]
-    x,y = info[0]
+    x, y = info[0]
+    # Initialiser la vitesse de déplacement
     fb = 0
 
-#calcul du delta avec le centre pour recalibré
-    error = x - w//2
-    speed = pid[0] * error + pid[1] * (error-pError)
+    # Calculer l'erreur en direction x
+    error = x - w // 2
+    # Calculer la vitesse en fonction de l'erreur et des coefficients PID
+    speed = pid[0] * error + pid[1] * (error - pError)
+    # Limiter la vitesse à l'intervalle -100 à 100
     speed = int(np.clip(speed, -100, 100))
 
-    #vert zone
+    # Si la superficie du visage est dans la plage, définir la vitesse de déplacement à 0
     if area > fbRange[0] and area < fbRange[1]:
-        fb=0
-    #trop pres
-    if area>fbRange[1]:
-        fb=-20
-    #trop loin
-    elif area<fbRange[0] and area != 0:
-        fb=20
+        fb = 0
+    # Si la superficie du visage est trop grande, définir la vitesse de déplacement à -20
+    elif area > fbRange[1]:
+        fb = -20
+    # Si la superficie du visage est trop petite, définir la vitesse de déplacement à 20
+    elif area < fbRange[0] and area != 0:
+        fb = 20
 
-
-
+    # Si la coordonnée x est 0, définir la vitesse à 0
     if x == 0:
-        speed=0
-        error=0
+        speed = 0
+        error = 0
 
-
+    # Envoyer les commandes de contrôle au drone
     me.send_rc_control(0, fb, 0, speed)
 
+    # Retourner l'erreur
     return error
 
+# Définir le classificateur Haar cascade pour la détection de visage
+faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
-
-#cap = cv2.VideoCapture(0)
+# Boucle principale
 while True:
-    #_, img = cap.read()
-
-    img = me.get_frame_read().frame
-
-    # Appliquer un filtre de correction de couleur pour corriger la couleur bleu
-    #img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    img = cv2.resize(img, (w, h))
+    # Récupérer la frame actuelle de la caméra du drone
+    img = me.get_frame()
+    # Convertir l'image en niveau de gris
+    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.uint8)
+    # Detecter les visages dans l'image
+    faces = faceCascade.detectMultiScale(imgGray, scaleFactor=1.1, minNeighbors=5)
+    # Trouver le visage dans l'image
     img, info = findFace(img)
-    pError = trackFace( info, w, pid, pError)
-    #print("Aire de reconnaissance",info[1],"Centre",info[1])
-
-    cv2.imshow("Output",img)
-
+    # Suivre le visage
+    pError = trackFace(me, info, w, pid, pError)
+    # Afficher la sortie
+    cv2.imshow("Sortie", img)
     if cv2.waitKey(1) & 0xff == ord('k'):
         me.land()
         break
